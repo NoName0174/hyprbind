@@ -1,0 +1,964 @@
+#!/bin/sh
+# hyprbind — zero-dependency Hyprland keybind generator
+# POSIX sh + awk. No Python, no fzf, no nothing else.
+# https://github.com/<YOUR_USER>/hyprbind
+
+# ── Usage ──────────────────────────────────────────────────────────
+usage() {
+    cat <<'EoU'
+Usage: hyprbind [OPTIONS] [SELECTION]
+
+SELECTION (skip for interactive TUI):
+  --all           Include all binds
+  1,3,5-9         Bind numbers/ranges (from --list)
+  --list          Show numbered list of all binds
+
+OPTIONS:
+  --format conf   hyprland.conf output (default)
+  --format lua    end-4 Caelestia Lua output
+  -o, --output DIR   Write files to DIR instead of stdout
+
+Examples:
+  hyprbind                                    # TUI → stdout
+  hyprbind --all -o ~/hypr/                   # all binds to files
+  hyprbind --list                             # see numbers
+  hyprbind 1,3,5-7,10                         # pick by number
+EoU
+}
+
+# ── Master bind database (embedded data) ──────────────────────────
+# Pipe-delimited: combo|category|desc|mods|key|disp|arg|flags|mouse
+# mods are space-separated. flags: l=locked r=repeating.
+
+BINDS=$(cat <<'BINDS'
+SUPER + Q|Apps|Terminal|SUPER|Q|exec|kitty||0|b
+SUPER + Return|Apps|Terminal|SUPER|Return|exec|kitty||0|b
+SUPER + E|Apps|File manager|SUPER|E|exec|nautilus||0|b
+SUPER + W|Apps|Browser|SUPER|W|exec|firefox||0|b
+SUPER + R|Apps|Run launcher|SUPER|R|exec|rofi -show drun||0|b
+SUPER + Space|Apps|App launcher|SUPER|Space|exec|rofi -show drun||0|b
+SUPER + X|Apps|Text editor|SUPER|X|exec|gedit||0|b
+SUPER + I|Apps|Settings|SUPER|I|exec|gnome-control-center||0|b
+CTRL + SHIFT + Escape|Apps|Task manager|CTRL SHIFT|Escape|exec|htop||0|b
+SUPER + SHIFT + W|Apps|Office suite|SUPER SHIFT|W|exec|libreoffice||0|b
+CTRL + SUPER + V|Apps|Volume mixer|CTRL SUPER|V|exec|pavucontrol||0|b
+SUPER + mouse:272|Window|Move window|SUPER|mouse:272|movewindow|||1|b
+SUPER + mouse:273|Window|Resize window|SUPER|mouse:273|resizewindow|||1|b
+SUPER + Left|Window|Focus left|SUPER|Left|movefocus|l||0|b
+SUPER + Right|Window|Focus right|SUPER|Right|movefocus|r||0|b
+SUPER + Up|Window|Focus up|SUPER|Up|movefocus|u||0|b
+SUPER + Down|Window|Focus down|SUPER|Down|movefocus|d||0|b
+SUPER + SHIFT + Left|Window|Move window left|SUPER SHIFT|Left|movewindow|l||0|b
+SUPER + SHIFT + Right|Window|Move window right|SUPER SHIFT|Right|movewindow|r||0|b
+SUPER + SHIFT + Up|Window|Move window up|SUPER SHIFT|Up|movewindow|u||0|b
+SUPER + SHIFT + Down|Window|Move window down|SUPER SHIFT|Down|movewindow|d||0|b
+SUPER + C|Window|Close window|SUPER|C|killactive|||0|b
+SUPER + SHIFT + C|Window|Force close|SUPER SHIFT|C|exec|hyprctl kill||0|b
+SUPER + V|Window|Float/tile|SUPER|V|togglefloating|||0|b
+SUPER + D|Window|Maximize|SUPER|D|fullscreen|1||0|b
+SUPER + F|Window|Fullscreen|SUPER|F|fullscreen|0||0|b
+SUPER + P|Window|Pin window|SUPER|P|pin|||0|b
+SUPER + Semicolon|Window|Shrink split|SUPER|semicolon|splitratio|-0.1|r|0|b
+SUPER + Apostrophe|Window|Grow split|SUPER|apostrophe|splitratio|+0.1|r|0|b
+SUPER + ALT + Space|Window|Float/tile|SUPER ALT|space|togglefloating|||0|b
+SUPER + SHIFT + Page_Up|Window|Send to workspace left|SUPER SHIFT|page_up|movetoworkspace|r-1||0|b
+SUPER + SHIFT + Page_Down|Window|Send to workspace right|SUPER SHIFT|page_down|movetoworkspace|r+1||0|b
+ALT + Tab|Window|Cycle windows|ALT|Tab|focuscurrentorlast|||0|b
+SUPER + 1|Workspace|Workspace 1|SUPER|1|workspace|1||0|b
+SUPER + 2|Workspace|Workspace 2|SUPER|2|workspace|2||0|b
+SUPER + 3|Workspace|Workspace 3|SUPER|3|workspace|3||0|b
+SUPER + 4|Workspace|Workspace 4|SUPER|4|workspace|4||0|b
+SUPER + 5|Workspace|Workspace 5|SUPER|5|workspace|5||0|b
+SUPER + 6|Workspace|Workspace 6|SUPER|6|workspace|6||0|b
+SUPER + 7|Workspace|Workspace 7|SUPER|7|workspace|7||0|b
+SUPER + 8|Workspace|Workspace 8|SUPER|8|workspace|8||0|b
+SUPER + 9|Workspace|Workspace 9|SUPER|9|workspace|9||0|b
+SUPER + 0|Workspace|Workspace 10|SUPER|10|workspace|10||0|b
+SUPER + SHIFT + 1|Workspace|Move to workspace 1|SUPER SHIFT|1|movetoworkspace|1||0|b
+SUPER + SHIFT + 2|Workspace|Move to workspace 2|SUPER SHIFT|2|movetoworkspace|2||0|b
+SUPER + SHIFT + 3|Workspace|Move to workspace 3|SUPER SHIFT|3|movetoworkspace|3||0|b
+SUPER + SHIFT + 4|Workspace|Move to workspace 4|SUPER SHIFT|4|movetoworkspace|4||0|b
+SUPER + SHIFT + 5|Workspace|Move to workspace 5|SUPER SHIFT|5|movetoworkspace|5||0|b
+SUPER + SHIFT + 6|Workspace|Move to workspace 6|SUPER SHIFT|6|movetoworkspace|6||0|b
+SUPER + SHIFT + 7|Workspace|Move to workspace 7|SUPER SHIFT|7|movetoworkspace|7||0|b
+SUPER + SHIFT + 8|Workspace|Move to workspace 8|SUPER SHIFT|8|movetoworkspace|8||0|b
+SUPER + SHIFT + 9|Workspace|Move to workspace 9|SUPER SHIFT|9|movetoworkspace|9||0|b
+SUPER + SHIFT + 0|Workspace|Move to workspace 10|SUPER SHIFT|10|movetoworkspace|10||0|b
+CTRL + SUPER + Left|Workspace|Focus workspace left|CTRL SUPER|Left|workspace|r-1||0|b
+CTRL + SUPER + Right|Workspace|Focus workspace right|CTRL SUPER|Right|workspace|r+1||0|b
+SUPER + Page_Up|Workspace|Focus workspace left|SUPER|page_up|workspace|r-1||0|b
+SUPER + Page_Down|Workspace|Focus workspace right|SUPER|page_down|workspace|r+1||0|b
+SUPER + mouse_up|Workspace|Focus workspace left|SUPER|mouse_up|workspace|r-1||0|b
+SUPER + mouse_down|Workspace|Focus workspace right|SUPER|mouse_down|workspace|r+1||0|b
+CTRL + SUPER + ALT + Left|Workspace|Focus monitor left|CTRL SUPER ALT|Left|workspace|m-1||0|b
+CTRL + SUPER + ALT + Right|Workspace|Focus monitor right|CTRL SUPER ALT|Right|workspace|m+1||0|b
+SUPER + S|Workspace|Toggle scratchpad|SUPER|S|togglespecialworkspace|||0|b
+SUPER + SHIFT + S|Workspace|Move to scratchpad|SUPER SHIFT|S|movetoworkspace|special||0|b
+SUPER + L|Session|Lock screen|SUPER|L|exec|loginctl lock-session||0|b
+SUPER + SHIFT + L|Session|Sleep|SUPER SHIFT|L|exec|systemctl suspend|l|0|b
+SUPER + M|Session|Log out|SUPER|M|exec|hyprctl dispatch exit||0|b
+CTRL + ALT + Delete|Session|Shut down|CTRL ALT|Delete|exec|systemctl poweroff||0|b
+XF86MonBrightnessUp|Hardware|Brightness up||XF86MonBrightnessUp|exec|brightnessctl s 5%+|lr|0|b
+XF86MonBrightnessDown|Hardware|Brightness down||XF86MonBrightnessDown|exec|brightnessctl s 5%-|lr|0|b
+XF86AudioRaiseVolume|Hardware|Volume up||XF86AudioRaiseVolume|exec|wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%+ -l 1.5|lr|0|b
+XF86AudioLowerVolume|Hardware|Volume down||XF86AudioLowerVolume|exec|wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%-|lr|0|b
+XF86AudioMute|Hardware|Mute||XF86AudioMute|exec|wpctl set-mute @DEFAULT_SINK@ toggle|l|0|b
+XF86AudioMicMute|Hardware|Mute mic||XF86AudioMicMute|exec|wpctl set-mute @DEFAULT_SOURCE@ toggle|l|0|b
+SUPER + SHIFT + M|Hardware|Toggle mute|SUPER SHIFT|M|exec|wpctl set-mute @DEFAULT_SINK@ toggle|l|0|b
+SUPER + ALT + M|Hardware|Toggle mic|SUPER ALT|M|exec|wpctl set-mute @DEFAULT_SOURCE@ toggle||0|b
+XF86AudioNext|Media|Next track||XF86AudioNext|exec|playerctl next|l|0|b
+XF86AudioPrev|Media|Previous track||XF86AudioPrev|exec|playerctl previous|l|0|b
+XF86AudioPlay|Media|Play/pause||XF86AudioPlay|exec|playerctl play-pause|l|0|b
+XF86AudioPause|Media|Pause||XF86AudioPause|exec|playerctl play-pause|l|0|b
+SUPER + SHIFT + N|Media|Next track|SUPER SHIFT|N|exec|playerctl next|l|0|b
+SUPER + SHIFT + B|Media|Previous track|SUPER SHIFT|B|exec|playerctl previous|l|0|b
+SUPER + SHIFT + P|Media|Play/pause|SUPER SHIFT|P|exec|playerctl play-pause|l|0|b
+Print|Utilities|Screenshot||Print|exec|grim - | wl-copy|l|0|b
+CTRL + Print|Utilities|Screenshot to file|CTRL|Print|exec|grim $(xdg-user-dir PICTURES)/Screenshots/$(date +%Y-%m-%d_%H.%M.%S).png|l|0|b
+SUPER + SHIFT + S|Utilities|Screenshot region|SUPER SHIFT|S|exec|grim -g "$(slurp)" - | wl-copy||0|b
+SUPER + SHIFT + R|Utilities|Screen record region|SUPER SHIFT|R|exec|wf-recorder -f ~/Videos/$(date +%Y-%m-%d_%H.%M.%S).mp4|l|0|b
+SUPER + SHIFT + C|Utilities|Color picker|SUPER SHIFT|C|exec|hyprpicker -a||0|b
+SUPER + Minus|Screen|Zoom out|SUPER|minus|exec|hyprctl setcursor zoom_factor $(bc <<< "$(hyprctl getoption cursor:zoom_factor -j | jq .float) - 0.3")|r|0|b
+SUPER + Equal|Screen|Zoom in|SUPER|equal|exec|hyprctl setcursor zoom_factor $(bc <<< "$(hyprctl getoption cursor:zoom_factor -j | jq .float) + 0.3")|r|0|b
+BINDS
+)
+
+# ── Parse selection: "1,3,5-9" → line numbers ─────────────────────
+# Prints matching line numbers (1-indexed), one per line.
+parse_range() {
+    nlines=$1
+    input=$2
+    echo "$input" | awk -v n="$nlines" '
+    BEGIN { FS = "[, ]+" }
+    {
+        for (i = 1; i <= NF; i++) {
+            if ($i ~ /^[0-9]+$/) {
+                v = int($i)
+                if (v >= 1 && v <= n) print v
+            } else if ($i ~ /^[0-9]+-[0-9]+$/) {
+                split($i, a, "-")
+                start = int(a[1]); end = int(a[2])
+                if (start > end) { t = start; start = end; end = t }
+                for (j = start; j <= end; j++)
+                    if (j >= 1 && j <= n) print j
+            }
+        }
+    }'
+}
+
+# ── Awk config generation engine ──────────────────────────────────
+# Reads pipe-delimited bind lines from stdin, writes config to stdout.
+# Arg 1: output format (conf or lua)
+
+gen_config() {
+    fmt=$1
+    awk \
+        -v fmt="$fmt" \
+        -v has_tty="$(test -t 1 && echo 1 || echo 0)" \
+        '
+    BEGIN {
+        FS = "|"
+        keymap["semicolon"] = "Semicolon"
+        keymap["apostrophe"] = "Apostrophe"
+        keymap["page_up"] = "Page_Up"
+        keymap["page_down"] = "Page_Down"
+        keymap["mouse_up"] = "mouse_up"
+        keymap["mouse_down"] = "mouse_down"
+        keymap["mouse:272"] = "mouse:272"
+        keymap["mouse:273"] = "mouse:273"
+        keymap["mouse:275"] = "mouse:275"
+        keymap["minus"] = "Minus"
+        keymap["equal"] = "Equal"
+        keymap["space"] = "Space"
+        keymap["left"] = "Left"
+        keymap["right"] = "Right"
+        keymap["up"] = "Up"
+        keymap["down"] = "Down"
+        keymap["slash"] = "Slash"
+        keymap["period"] = "Period"
+        keymap["delete"] = "Delete"
+        keymap["escape"] = "Escape"
+        keymap["print"] = "Print"
+
+        if (fmt == "conf") {
+            print "# keybinds.conf  generated by hyprbind"
+            print "# https://github.com/<YOUR_USER>/hyprbind"
+            print "# source = ~/.config/hypr/keybinds.conf"
+            print ""
+            print "$mainMod = SUPER"
+            print ""
+        } else if (fmt == "lua") {
+            print "-- keybinds.lua  generated by hyprbind"
+            print "-- https://github.com/<YOUR_USER>/hyprbind"
+            print "-- require(\"hyprbind\") from hyprland.lua"
+            print ""
+        }
+    }
+
+    function fmtkey(k) {
+        return k in keymap ? keymap[k] : k
+    }
+
+    function hasflag(f, c) {
+        return index(f, c) > 0
+    }
+
+    function joinmods(m) {
+        gsub(/ /, " + ", m)
+        return m
+    }
+
+    {
+        combo = $1
+        cat   = $2
+        desc  = $3
+        mods  = $4
+        key   = $5
+        disp  = $6
+        # arg starts at $7; | in args splatters across fields — rejoin
+        # Fields: 1-6 combo..disp, 7+ arg, NF-2 flags, NF-1 mouse, NF type
+        arg = $7
+        for (i = 8; i <= NF - 3; i++)
+            arg = arg "|" $i
+        flags = $(NF - 2)
+        mouse = $(NF - 1)
+
+        if (fmt == "conf") {
+            modstr = mods
+            gsub(/SUPER/, "$mainMod", modstr)
+            keystr = fmtkey(key)
+            fl = "bind"
+            if (hasflag(flags, "l")) fl = fl "l"
+            if (hasflag(flags, "r")) fl = fl "r"
+
+            if (mouse == "1") {
+                print "  # " desc
+                print "  bindm = " modstr ", " keystr
+            } else if (arg == "") {
+                print "  # " desc
+                print "  " fl " = " modstr ", " keystr ", " disp
+            } else {
+                print "  # " desc
+                print "  " fl " = " modstr ", " keystr ", " disp ", " arg
+            }
+        } else         if (fmt == "lua") {
+            gsub(/"/, "\\\"", arg)
+            gsub(/"/, "\\\"", desc)
+
+            opts = "{"
+            if (hasflag(flags, "l")) opts = opts "locked = true, "
+            if (hasflag(flags, "r")) opts = opts "repeating = true, "
+            if (mouse == "1") opts = opts "mouse = true, "
+            opts = opts sprintf("description = \"%s\" }", desc)
+
+            if (mouse == "1") {
+                if (disp == "movewindow")
+                    ldisp = "hl.dsp.window.drag()"
+                else
+                    ldisp = "hl.dsp.window.resize()"
+            } else if (disp == "exec") {
+                ldisp = sprintf("hl.dsp.exec_cmd(\"%s\")", arg)
+            } else if (disp == "killactive" || disp == "togglefloating" || disp == "pin" || disp == "togglespecialworkspace" || disp == "focuscurrentorlast") {
+                ldisp = sprintf("hl.dsp.%s()", disp)
+            } else if (disp == "movefocus") {
+                ldisp = sprintf("hl.dsp.focus({ direction = \"%s\" })", arg)
+            } else if (disp == "movewindow") {
+                ldisp = sprintf("hl.dsp.window.move({ direction = \"%s\" })", arg)
+            } else if (disp == "movetoworkspace") {
+                ldisp = sprintf("hl.dsp.window.move({ workspace = \"%s\", follow = true })", arg)
+            } else if (disp == "workspace") {
+                ldisp = sprintf("hl.dsp.focus({ workspace = \"%s\" })", arg)
+            } else if (disp == "fullscreen") {
+                mode = (arg == "1" ? "maximized" : "fullscreen")
+                ldisp = sprintf("hl.dsp.window.fullscreen({ mode = \"%s\", action = \"toggle\" })", mode)
+            } else if (disp == "splitratio") {
+                ldisp = sprintf("hl.dsp.layout(\"splitratio %s\")", arg)
+            } else {
+                ldisp = sprintf("hl.dsp.%s(\"%s\")", disp, arg)
+            }
+
+            print sprintf("hl.bind(\"%s\", %s, %s)", combo, ldisp, opts)
+        }
+    }'
+}
+
+# ── List: print all binds with numbers ────────────────────────────
+list_binds() {
+    echo "$BINDS" | awk '
+    BEGIN { FS = "|"; n = 0 }
+    NF >= 4 {
+        n++
+        printf "%3d  %s    %s: %s\n", n, $1, $2, $3
+    }'
+}
+
+# ── TUI: interactive selection without fzf ────────────────────────
+# Pure sh + awk TUI. Uses /dev/tty for input, shows a scrollable
+# numbered list with toggles. Space/multi-number selection.
+
+tui_select() {
+    if [ ! -r /dev/tty ]; then
+        printf 'No /dev/tty available.\nTry: hyprbind --list  (then pick numbers)\nOr:  hyprbind --all\n' >&2
+        exit 1
+    fi
+
+    # Redirect all TUI display to stderr so stdout is only the result
+    exec 3>&1
+    exec 1>&2
+    # Enter alternate screen (like vim/htop — no scrollback pollution)
+    printf '\033[?1049h'
+
+    nlines=$(echo "$BINDS" | awk -F'|' 'NF >= 4' | wc -l)
+    nlines=$(printf '%s' "$nlines" | tr -d ' ')
+    OFS=/tmp/hyprbinds_selected_$$; clean() { printf '\033[?1049l'; rm -f "$OFS" /tmp/hybinds_fmap_$$; }; trap clean EXIT
+
+    # Write all selected (0/1 per line) to a temp file, init to 0
+    i=1
+    while [ "$i" -le "$nlines" ]; do
+        echo 0 >> "$OFS"
+        i=$((i + 1))
+    done
+
+    PAGE_SIZE=15
+    scroll=0
+    filter=""
+    FMAP=/tmp/hybinds_fmap_$$
+
+    while :; do
+        # Build filtered line list
+        printf '' > "$FMAP"
+        [ -n "$filter" ] && echo "$BINDS" | awk -F'|' -v f="$filter" '
+        tolower($0) ~ tolower(f) { print NR }
+        ' > "$FMAP"
+
+        filter_nlines=$(wc -l < "$FMAP" | tr -d ' ')
+        display_nlines="$nlines"
+        [ -n "$filter" ] && display_nlines="$filter_nlines"
+
+        printf '\033[H\033[J'
+
+        # Header
+        selcount=$(awk '{s+=$1} END{print s+0}' "$OFS")
+        last=$((scroll + PAGE_SIZE))
+        [ "$last" -gt "$display_nlines" ] && last=$display_nlines
+        printf '\033[1m=== hyprbind — Select binds to KEEP ===\033[0m\n'
+        if [ -n "$filter" ]; then
+            printf 'Filter: %s    ' "$filter"
+        fi
+        printf 'Selected: %d / %d    Showing %d-%d of %d\n\n' "$selcount" "$nlines" "$((scroll + 1))" "$last" "$display_nlines"
+
+        # Print binds with toggles (only visible page, filtered)
+        if [ -n "$filter" ]; then
+            echo "$BINDS" | awk \
+                -v ofs="$OFS" \
+                -v fmap="$FMAP" \
+                -v scroll="$scroll" \
+                -v page_size="$PAGE_SIZE" \
+            '
+            BEGIN { FS = "|" }
+            NR == FNR { fmap[NR] = $1; next }
+            NF >= 4 {
+                for (i = 1; i in fmap; i++) {
+                    if (fmap[i] == NR) {
+                        fi = i
+                        break
+                    }
+                }
+                if (fi == 0) next
+                getline sel < ofs
+                if (fi <= scroll || fi > scroll + page_size) { fi = 0; next }
+                mark = (sel == 1 ? "*" : " ")
+                line = sprintf("[%s] %3d  %s    %s: %s", mark, fi, $1, $2, $3)
+                print line
+                fi = 0
+            }' "$FMAP" -
+        else
+            echo "$BINDS" | awk \
+                -v ofs="$OFS" \
+                -v scroll="$scroll" \
+                -v page_size="$PAGE_SIZE" \
+            '
+            BEGIN { FS = "|" }
+            NF >= 4 {
+                nr++
+                getline sel < ofs
+                if (nr <= scroll || nr > scroll + page_size) next
+                mark = (sel == 1 ? "*" : " ")
+                line = sprintf("[%s] %3d  %s    %s: %s", mark, nr, $1, $2, $3)
+                print line
+            }'
+        fi
+
+        # Bottom prompt
+        printf '\n\033[1mPage %d/%d\033[0m   q: up  e: down  /: search\n' "$((scroll / PAGE_SIZE + 1))" "$(((display_nlines + PAGE_SIZE - 1) / PAGE_SIZE))"
+        printf '  <num>       toggle a bind\n'
+        printf '  <start>-<end>  toggle range\n'
+        printf '  <space separated>  toggle multiple\n'
+        printf '  a           select all\n'
+        printf '  n           select none\n'
+        printf '  x           quit (no output)\n'
+        printf '  <Enter>     confirm selection and generate\n'
+        printf '\n> '
+
+        # Read input from /dev/tty
+        if [ -r /dev/tty ]; then
+            read -r input < /dev/tty
+        else
+            read -r input
+        fi
+
+        # Map display number to original line number if filter active
+        map_num() {
+            num="$1"
+            if [ -n "$filter" ] && [ "$num" -ge 1 ] 2>/dev/null && [ "$num" -le "$filter_nlines" ] 2>/dev/null; then
+                num=$(awk "NR==$num{print;exit}" "$FMAP")
+            fi
+            printf '%s' "$num"
+        }
+
+        case "$input" in
+            e|E)
+                [ "$((scroll + PAGE_SIZE))" -lt "$display_nlines" ] && scroll=$((scroll + PAGE_SIZE))
+                [ "$scroll" -gt "$((display_nlines - PAGE_SIZE))" ] && scroll=$((display_nlines - PAGE_SIZE))
+                [ "$scroll" -lt 0 ] && scroll=0
+                continue
+                ;;
+            x|X)
+                rm -f "$FMAP"; exit 0
+                ;;
+            q|Q)
+                scroll=$((scroll - PAGE_SIZE))
+                [ "$scroll" -lt 0 ] && scroll=0
+                continue
+                ;;
+            /)
+                printf '\n\033[1mSearch: \033[0m'
+                read -r filter < /dev/tty
+                scroll=0
+                continue
+                ;;
+            a|A)
+                if [ -n "$filter" ]; then
+                    while IFS= read -r l; do
+                        awk -v n="$l" 'NR == n { print 1; next } { print }' "$OFS" > "${OFS}_tmp" && mv "${OFS}_tmp" "$OFS"
+                    done < "$FMAP"
+                else
+                    awk '{print 1}' "$OFS" > "${OFS}_new" && mv "${OFS}_new" "$OFS"
+                fi
+                continue
+                ;;
+            n|N)
+                if [ -n "$filter" ]; then
+                    while IFS= read -r l; do
+                        awk -v n="$l" 'NR == n { print 0; next } { print }' "$OFS" > "${OFS}_tmp" && mv "${OFS}_tmp" "$OFS"
+                    done < "$FMAP"
+                else
+                    awk '{print 0}' "$OFS" > "${OFS}_new" && mv "${OFS}_new" "$OFS"
+                fi
+                continue
+                ;;
+            "")
+                if [ "$selcount" -gt 0 ]; then
+                    rm -f "$FMAP"; break
+                else
+                    continue
+                fi
+                ;;
+            *)
+                toggles=$(parse_range "$display_nlines" "$input")
+                if [ -n "$toggles" ]; then
+                    printf '%s\n' "$toggles" | sort -n -u | while read -r num; do
+                        [ -z "$num" ] && continue
+                        num=$(map_num "$num")
+                        [ -z "$num" ] && continue
+                        awk -v n="$num" '
+                        NR == n { print 1 - $1; next }
+                        { print }
+                        ' "$OFS" > "${OFS}_tmp" && mv "${OFS}_tmp" "$OFS"
+                    done
+                else
+                    printf '\nInvalid input. Press Enter to continue.'
+                    read -r _ < /dev/tty 2>/dev/null || read -r _
+                fi
+                ;;
+        esac
+    done
+
+    # Output selected bind indices (1-indexed) to original stdout (fd 3)
+    echo "$BINDS" | awk -F'|' 'NR == FNR { sel[NR] = $1; next } NF >= 4 { nr++; if (sel[nr] == 1) print nr }' "$OFS" - >&3
+}
+
+# ── Environment chooser ──────────────────────────────────────────
+# Prints "p", "q", or "b" to stdout.
+choose_env() {
+    exec 3>&1
+    exec 1>&2
+    if [ ! -r /dev/tty ]; then
+        printf 'b\n' >&3; return
+    fi
+    printf '\033[?1049h'
+    while :; do
+        printf '\033[H\033[J'
+        printf '\033[1m=== Choose Environment ===\033[0m\n'
+        printf '\n'
+        printf '  1) Plain Hyprland\n'
+        printf '     Standard hyprland.conf binds (no external shells)\n'
+        printf '\n'
+        printf '  2) Quickshell\n'
+        printf '     Includes quickshell-specific binds (hl.dsp.global, etc.)\n'
+        printf '\n'
+        printf '  3) Both\n'
+        printf '     All available binds\n'
+        printf '\n> '
+        read -r input < /dev/tty
+        case "$input" in
+            1|p|P) printf '\033[?1049l'; printf 'p\n' >&3; return ;;
+            2|q|Q) printf '\033[?1049l'; printf 'q\n' >&3; return ;;
+            3|b|B|"") printf '\033[?1049l'; printf 'b\n' >&3; return ;;
+        esac
+    done
+}
+
+# Filter BINDS by type (p/q/b) — writes to stdout
+filter_binds() {
+    env="$1"
+    echo "$BINDS" | awk -F'|' -v e="$env" '
+    NF >= 4 {
+        ty = $NF
+        if (e == "b" || ty == e || ty == "b") print
+    }'
+}
+
+# ── Customization: edit selected binds ──────────────────────────
+# Takes a file of pipe-delimited selected binds and lets the user edit them.
+# Writes modified data to stdout.
+customize_binds() {
+    datafile="$1"
+    # Redirect display to stderr so stdout returns modified data
+    exec 3>&1
+    exec 1>&2
+    printf '\033[?1049h'
+
+    if [ ! -r /dev/tty ]; then
+        cat "$datafile" >&3; printf '\033[?1049l'; return
+    fi
+
+    nlines=$(wc -l < "$datafile" | tr -d ' ')
+    [ "$nlines" -eq 0 ] && { printf '\033[?1049l'; return; }
+
+    # Build OFS toggle file and session changelog
+    ofscf="/tmp/hybinds_custom_$$"
+    logf="/tmp/hybinds_log_$$"
+    : > "$logf"
+    i=1; while [ "$i" -le "$nlines" ]; do echo 1 >> "$ofscf"; i=$((i + 1)); done
+
+    PAGE_SIZE=15
+    scroll=0
+    filter=""
+    CFMAP=/tmp/hybinds_cfmap_$$
+
+    while :; do
+        # Build filtered line list
+        printf '' > "$CFMAP"
+        [ -n "$filter" ] && awk -F'|' -v f="$filter" '
+        tolower($0) ~ tolower(f) { print NR }
+        ' "$datafile" > "$CFMAP"
+
+        filter_nlines=$(wc -l < "$CFMAP" | tr -d ' ')
+        display_nlines="$nlines"
+        [ -n "$filter" ] && display_nlines="$filter_nlines"
+
+        selcount=$(awk '{s+=$1} END{print s+0}' "$ofscf")
+        last=$((scroll + PAGE_SIZE))
+        [ "$last" -gt "$display_nlines" ] && last=$display_nlines
+        printf '\033[H\033[J'
+        printf '\033[1m=== Customize Selected Binds ===\033[0m\n'
+        if [ -n "$filter" ]; then
+            printf 'Filter: %s    ' "$filter"
+        fi
+        printf 'Enabled: %d / %d    Showing %d-%d of %d\n\n' "$selcount" "$nlines" "$((scroll + 1))" "$last" "$display_nlines"
+
+        if [ -n "$filter" ]; then
+            awk -v ofs="$ofscf" -v fmap="$CFMAP" -v scroll="$scroll" -v page_size="$PAGE_SIZE" '
+            BEGIN { FS = "|" }
+            NR == FNR { fmap[NR] = $1; next }
+            NF >= 4 {
+                for (i = 1; i in fmap; i++) {
+                    if (fmap[i] == NR) { fi = i; break }
+                }
+                if (fi == 0) next
+                getline sel < ofs
+                if (fi <= scroll || fi > scroll + page_size) { fi = 0; next }
+                mark = (sel == 1 ? "*" : " ")
+                printf "[%s] %3d  %s    %s: %s\n", mark, fi, $1, $2, $3
+                fi = 0
+            }' "$CFMAP" "$datafile"
+        else
+            awk -v ofs="$ofscf" -v scroll="$scroll" -v page_size="$PAGE_SIZE" '
+            BEGIN { FS = "|" }
+            NF >= 4 {
+                nr++
+                getline sel < ofs
+                if (nr <= scroll || nr > scroll + page_size) next
+                mark = (sel == 1 ? "*" : " ")
+                printf "[%s] %3d  %s    %s: %s\n", mark, nr, $1, $2, $3
+            }' "$datafile"
+        fi
+
+        if [ -s "$logf" ]; then
+            printf '\n\033[1mSession changes:\033[0m\n'
+            while IFS= read -r l; do printf '  %s\n' "$l"; done < "$logf"
+        fi
+
+        printf '\n\033[1mPage %d/%d\033[0m   q: up  e: down  /: search\n' "$((scroll / PAGE_SIZE + 1))" "$(((display_nlines + PAGE_SIZE - 1) / PAGE_SIZE))"
+        printf '\033[1mCommands:\033[0m\n'
+        printf '  <num>       edit that bind\n'
+        printf '  d <num>     toggle enable/disable\n'
+        printf '  x           quit (no output)\n'
+        printf '  <Enter>     confirm and generate\n'
+        printf '\n> '
+        read -r input < /dev/tty
+
+        # Map display number to original line number if filter active
+        map_num() {
+            num="$1"
+            if [ -n "$filter" ] && [ "$num" -ge 1 ] 2>/dev/null && [ "$num" -le "$filter_nlines" ] 2>/dev/null; then
+                num=$(awk "NR==$num{print;exit}" "$CFMAP")
+            fi
+            printf '%s' "$num"
+        }
+
+        case "$input" in
+            x|X) rm -f "$CFMAP"; printf '\033[?1049l'; rm -f "$ofscf" "$logf"; exit 0 ;;
+            e|E)
+                [ "$((scroll + PAGE_SIZE))" -lt "$display_nlines" ] && scroll=$((scroll + PAGE_SIZE))
+                [ "$scroll" -gt "$((display_nlines - PAGE_SIZE))" ] && scroll=$((display_nlines - PAGE_SIZE))
+                [ "$scroll" -lt 0 ] && scroll=0
+                continue
+                ;;
+            q|Q)
+                scroll=$((scroll - PAGE_SIZE))
+                [ "$scroll" -lt 0 ] && scroll=0
+                continue
+                ;;
+            /)
+                printf '\n\033[1mSearch: \033[0m'
+                read -r filter < /dev/tty
+                scroll=0
+                continue
+                ;;
+            "")
+                if [ "$selcount" -gt 0 ]; then
+                    # Output enabled binds only
+                    awk -v ofs="$ofscf" '
+                    BEGIN { FS = "|" }
+                    NR == FNR { want[NR] = $1; next }
+                    NF >= 4 { nr++; if (want[nr] == 1) print }
+                    ' "$ofscf" "$datafile" >&3
+                    rm -f "$ofscf" "$logf" "$CFMAP"
+                    printf '\033[?1049l'
+                    return
+                fi
+                continue
+                ;;
+            [dD]*)
+                rest=$(printf '%s' "$input" | sed 's/^[dD] *//')
+                rest=$(map_num "$rest")
+                if [ -n "$rest" ] && [ "$rest" -ge 1 ] 2>/dev/null && [ "$rest" -le "$nlines" ] 2>/dev/null; then
+                    awk -v n="$rest" 'NR == n { print 1 - $1; next } { print }' "$ofscf" > "${ofscf}_tmp" && mv "${ofscf}_tmp" "$ofscf"
+                fi
+                continue
+                ;;
+            [0-9]*)
+                num="$input"
+                num=$(map_num "$num")
+                if [ "$num" -ge 1 ] 2>/dev/null && [ "$num" -le "$nlines" ] 2>/dev/null; then
+                    # Shell-escape and read bind fields via awk
+                    eval "$(awk -F'|' -v n="$num" '
+                    NR == n {
+                        combo = $1; cat = $2; desc = $3; mods = $4; key = $5; disp = $6
+                        arg = $7
+                        for (i = 8; i <= NF - 3; i++) arg = arg "|" $i
+                        flags = $(NF - 2); mouse = $(NF - 1); btype = $NF
+                        # Escape shell metacharacters
+                        gsub(/[$"\\`]/, "\\\\&", combo)
+                        gsub(/[$"\\`]/, "\\\\&", cat)
+                        gsub(/[$"\\`]/, "\\\\&", desc)
+                        gsub(/[$"\\`]/, "\\\\&", mods)
+                        gsub(/[$"\\`]/, "\\\\&", key)
+                        gsub(/[$"\\`]/, "\\\\&", disp)
+                        gsub(/[$"\\`]/, "\\\\&", arg)
+                        gsub(/[$"\\`]/, "\\\\&", flags)
+                        printf "combo=\"%s\"; cat=\"%s\"; desc=\"%s\"; mods=\"%s\"; key=\"%s\"; disp=\"%s\"; arg=\"%s\"; flags=\"%s\"; mouse=\"%s\"; btype=\"%s\"\n", combo, cat, desc, mods, key, disp, arg, flags, mouse, btype
+                    }' "$datafile")"
+
+                    # Inline edit — shows current values below the list
+                    printf '\n\033[1mEdit bind %d: %s — %s\033[0m\n' "$num" "$combo" "$desc"
+                    printf '  1) Combo: %s\n' "$combo"
+                    printf '  2) Mods:  %s\n' "$mods"
+                    printf '  3) Key:   %s\n' "$key"
+                    printf '  4) Disp:  %s\n' "$disp"
+                    printf '  5) Arg:   %s\n' "$arg"
+                    printf '  6) Flags: %s\n' "$flags"
+                    printf '\nField [1-6], or Enter to skip: '
+                    read -r fn < /dev/tty
+                    if [ -n "$fn" ]; then
+                        oldval=""
+                        case "$fn" in
+                            1) oldval="$combo" ;;
+                            2) oldval="$mods" ;;
+                            3) oldval="$key" ;;
+                            4) oldval="$disp" ;;
+                            5) oldval="$arg" ;;
+                            6) oldval="$flags" ;;
+                        esac
+                        printf '  Current: %s\n' "$oldval"
+                        printf '  New: '
+                        read -r newval < /dev/tty
+                        if [ -n "$newval" ]; then
+                            case "$fn" in
+                                1) combo="$newval" ;;
+                                2) mods="$newval" ;;
+                                3) key="$newval" ;;
+                                4) disp="$newval" ;;
+                                5) arg="$newval" ;;
+                                6) flags="$newval" ;;
+                            esac
+                            # Write updated line back to datafile
+                            awk -v n="$num" -v line="$combo|$cat|$desc|$mods|$key|$disp|$arg|$flags|$mouse|$btype" '
+                            NR == n { print line; next }
+                            { print }
+                            ' "$datafile" > "${datafile}_tmp" && mv "${datafile}_tmp" "$datafile"
+                            fname=$(set -- Combo Mods Key Disp Arg Flags; eval "printf '%s' \"\${$fn}\"")
+                            printf '  Bind %d: %s → "%s"\n' "$num" "$fname" "$newval" >> "$logf"
+                            printf '  \033[32mUpdated.\033[0m (was: %s)\n' "$oldval"
+                        fi
+                    fi
+                fi
+                continue
+                ;;
+        esac
+    done
+}
+
+# ── Format chooser ─────────────────────────────────────────────────
+choose_format() {
+    exec 3>&1
+    exec 1>&2
+    if [ ! -r /dev/tty ]; then
+        printf 'conf\n' >&3; return
+    fi
+    printf '\033[?1049h'
+    while :; do
+        printf '\033[H\033[J'
+        printf '\033[1m=== Choose Output Format ===\033[0m\n'
+        printf '\n'
+        printf '  1) hyprland.conf (Pre Hyprland 0.55)\n'
+        printf '     Standard hyprland.conf format\n'
+        printf '\n'
+        printf '  2) Lua (Latest)\n'
+        printf '     Lua config format\n'
+        printf '\n> '
+        read -r input < /dev/tty
+        case "$input" in
+            1|c|C|"") printf '\033[?1049l'; printf 'conf\n' >&3; return ;;
+            2|l|L) printf '\033[?1049l'; printf 'lua\n' >&3; return ;;
+        esac
+    done
+}
+
+# ── Main ──────────────────────────────────────────────────────────
+fmt=conf
+fmt_set=0
+output_dir=""
+
+# Parse flags first. --list and --all set action and exit the flag loop.
+action=""
+while :; do
+    case "${1:-}" in
+        --format) fmt_set=1; fmt=$2; shift 2 ;;
+        -o|--output) output_dir=$2; shift 2 ;;
+        --list) action="--list"; shift ;;
+        --all) action="--all"; shift ;;
+        --test) action="--test"; shift ;;
+        --help|-h) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) printf 'Unknown: %s\n\n' "$1" >&2; usage >&2; exit 1 ;;
+        *) break ;;
+    esac
+done
+
+# If action wasn't set by --list/--all, take the next positional arg
+if [ -z "$action" ]; then
+    action="${1:-}"
+fi
+
+case "$action" in
+    --list)
+        list_binds
+        ;;
+    --test)
+        # Dry-run: full interactive pipeline, but no config output
+        if [ ! -t 0 ]; then
+            printf 'stdin is not a terminal. Skipping interactive test.\n' >&2
+            printf 'Test: %s\n' "$(~/.local/bin/hyprbind --format conf 1 2>&1 | head -1)"
+            exit 0
+        fi
+        env=$(choose_env)
+        env=$(printf '%s' "$env" | tr -d '\n')
+        printf 'Test step 1: environment "%s".\n' "$env" >&2
+        all_binds="$BINDS"
+        BINDS=$(filter_binds "$env")
+        selected=$(tui_select)
+        count=$(printf '%s\n' "$selected" | wc -l | tr -d ' ')
+        printf 'Test step 2: selected %d binds.\n' "$count" >&2
+        if [ "$count" -eq 0 ]; then
+            BINDS="$all_binds"
+            printf 'Test: no binds selected.\n'
+            exit 0
+        fi
+        # Extract, customize, generate (dry)
+        SELTMP=/tmp/hybinds_test_sel_$$
+        echo "$BINDS" | awk '
+        BEGIN { FS = "|" }
+        NR == FNR { wanted[$1] = 1; next }
+        NF >= 4 { nr++; if (wanted[nr]) print }
+        ' <(printf '%s\n' "$selected") - > "$SELTMP"
+        printf 'Test step 3: customization TUI...\n' >&2
+        modified=$(customize_binds "$SELTMP")
+        rm -f "$SELTMP"
+        if [ -z "$modified" ]; then
+            BINDS="$all_binds"
+            printf 'Test: cancelled during customization.\n'
+            exit 0
+        fi
+        printf 'Test step 3 complete.\n' >&2
+
+        # Step 4: format chooser
+        if [ "$fmt_set" -eq 0 ]; then
+            printf 'Test step 4: format chooser...\n' >&2
+            fmt=$(choose_format)
+            fmt=$(printf '%s' "$fmt" | tr -d '\n')
+        fi
+
+        BINDS="$all_binds"
+        out=$(echo "$modified" | gen_config "$fmt")
+        lines=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+        printf 'Test: %d binds → %d lines of %s config (no files written).\n' "$count" "$lines" "$fmt"
+        exit 0
+        ;;
+    --all)
+        data="$BINDS"
+        out=$(echo "$data" | gen_config "$fmt")
+        if [ -n "$output_dir" ]; then
+            mkdir -p "$output_dir"
+            if [ "$fmt" = "lua" ]; then
+                echo "$out" > "$output_dir/keybinds.lua"
+            else
+                echo "$out" > "$output_dir/keybinds.conf"
+            fi
+            echo "Wrote $output_dir/keybinds.$fmt" >&2
+        else
+            echo "$out"
+        fi
+        ;;
+    "")
+        # Interactive multi-step TUI
+        if [ ! -t 0 ]; then
+            printf 'stdin is not a terminal. Cannot run interactive TUI.\n' >&2
+            printf 'Try: hyprbind --all\nOr:  hyprbind 1,3,5-9 (numbers from --list)\n' >&2
+            exit 1
+        fi
+
+        # Step 1: Choose environment
+        env=$(choose_env)
+        env=$(printf '%s' "$env" | tr -d '\n')
+
+        # Step 2: Filter BINDS by type
+        all_binds="$BINDS"
+        BINDS=$(filter_binds "$env")
+
+        # Step 3: Select binds
+        selected=$(tui_select)
+        if [ -z "$selected" ]; then
+            printf 'No binds selected.\n' >&2
+            exit 0
+        fi
+
+        count=$(printf '%s\n' "$selected" | wc -l | tr -d ' ')
+        printf '\nSelected %s binds.\n' "$count" >&2
+
+        # Step 4: Extract selected bind data to temp file
+        SELTMP=/tmp/hybinds_seldata_$$
+        echo "$BINDS" | awk '
+        BEGIN { FS = "|" }
+        NR == FNR { wanted[$1] = 1; next }
+        NF >= 4 { nr++; if (wanted[nr]) print }
+        ' <(printf '%s\n' "$selected") - > "$SELTMP"
+
+        # Step 5: Customize selected binds
+        modified=$(customize_binds "$SELTMP")
+        rm -f "$SELTMP"
+
+        if [ -z "$modified" ]; then
+            printf 'No binds to generate.\n' >&2
+            exit 0
+        fi
+
+        # Step 6: Choose output format (skip if --format was given)
+        if [ "$fmt_set" -eq 0 ]; then
+            fmt=$(choose_format)
+            fmt=$(printf '%s' "$fmt" | tr -d '\n')
+        fi
+
+        # Step 7: Restore full BINDS and generate config
+        BINDS="$all_binds"
+        out=$(echo "$modified" | gen_config "$fmt")
+        if [ -n "$output_dir" ]; then
+            mkdir -p "$output_dir"
+            if [ "$fmt" = "lua" ]; then
+                echo "$out" > "$output_dir/keybinds.lua"
+            else
+                echo "$out" > "$output_dir/keybinds.conf"
+            fi
+            echo "Wrote $output_dir/keybinds.$fmt" >&2
+        else
+            echo "$out"
+        fi
+        ;;
+    *)
+        # Treat as number/range selection
+        data="$BINDS"
+        nlines=$(echo "$data" | awk -F'|' 'NF >= 4' | wc -l | tr -d ' ')
+        indices=$(parse_range "$nlines" "$action")
+
+        if [ -z "$indices" ]; then
+            printf 'Invalid selection: %s\n' "$action" >&2
+            printf 'Use --list to see bind numbers.\n' >&2
+            exit 1
+        fi
+
+        count=$(printf '%s\n' "$indices" | wc -l | tr -d ' ')
+        printf 'Selected %d binds.\n' "$count" >&2
+
+        data=$(echo "$BINDS" | awk '
+        BEGIN { FS = "|" }
+        NR == FNR { wanted[$1] = 1; next }
+        NF >= 4 { nr++; if (wanted[nr]) print }
+        ' <(printf '%s\n' "$indices") -)
+
+        out=$(echo "$data" | gen_config "$fmt")
+        if [ -n "$output_dir" ]; then
+            mkdir -p "$output_dir"
+            if [ "$fmt" = "lua" ]; then
+                echo "$out" > "$output_dir/keybinds.lua"
+            else
+                echo "$out" > "$output_dir/keybinds.conf"
+            fi
+            echo "Wrote $output_dir/keybinds.$fmt" >&2
+        else
+            echo "$out"
+        fi
+        ;;
+esac
+

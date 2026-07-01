@@ -6,7 +6,7 @@ A TUI to setup Hyprland binds for beginners.
 
 - 4-step interactive pipeline: environment → select → customize → format
 - Environment filter: plain Hyprland, quickshell, or both
-- Paged TUI: scroll with q/e, navigate and toggle binds
+- Paged TUI: scroll with q/e, navigate and toggle binds, / to search/filter
 - Customization: edit combo/mods/key/disp/arg/flags per bind, disable unwanted ones, session changelog
 - Output formats: hyprland.conf (pre-0.55) or lua (latest)
 - Non-interactive modes: --list, --all, number/range selection
